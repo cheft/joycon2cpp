@@ -1290,54 +1290,94 @@ int main() {
           [joyconSide = player.side, joyconOrientation = player.orientation,
            &player](GattCharacteristic const &,
                     GattValueChangedEventArgs const &args) {
-        auto reader = DataReader::FromBuffer(args.CharacteristicValue());
-        std::vector<uint8_t> buffer(reader.UnconsumedBufferLength());
-        reader.ReadBytes(buffer);
+            auto reader = DataReader::FromBuffer(args.CharacteristicValue());
+            std::vector<uint8_t> buffer(reader.UnconsumedBufferLength());
+            reader.ReadBytes(buffer);
+
+            // Optical Mouse Toggle Logic (Only for Right Joy-Con/Joy-Con 2)
+            if (joyconSide == JoyConSide::Right) {
+              uint32_t btnState = ExtractButtonState(buffer);
+              bool chatPressed = (btnState & 0x000040) != 0;
+
+              if (chatPressed && !player.wasChatPressed) {
+                player.mouseMode = (player.mouseMode + 1) % 4;
+                const char *modeName = "OFF";
+                uint8_t ledPattern = 0x01;
+                if (player.mouseMode == 1) {
+                  modeName = "FAST";
+                  ledPattern = 0x02;
+                } else if (player.mouseMode == 2) {
+                  modeName = "NORMAL";
+                  ledPattern = 0x04;
+                } else if (player.mouseMode == 3) {
+                  modeName = "SLOW";
+                  ledPattern = 0x08;
+                }
+
+                TCOUT << TSTR("Optical Mouse Mode: ") << modeName << std::endl;
+                SetPlayerLEDs(player.joycon.writeChar, ledPattern);
+                EmitSound(player.joycon.writeChar);
+              }
+              player.wasChatPressed = chatPressed;
+            }
+
+            DS4_REPORT_EX report =
+                GenerateDS4Report(buffer, joyconSide, joyconOrientation);
+            vigem_target_ds4_update_ex(vigem_client, player.ds4Controller,
+                                       report);
+          });
+
+      auto status =
+          player.joycon.inputChar
+              .WriteClientCharacteristicConfigurationDescriptorAsync(
+                  GattClientCharacteristicConfigurationDescriptorValue::Notify)
+              .get();
+      if (status == GattCommunicationStatus::Success) {
+        TCOUT << TSTR("Notifications enabled.\n");
+        SendCustomCommands(player.joycon.writeChar);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        SetPlayerLEDs(player.joycon.writeChar, 0x01);
+        EmitSound(player.joycon.writeChar);
+      } else {
+        TCOUT << TSTR("Failed to enable notifications.\n");
+      }
 #else
       if (player.joycon.device->SubscribeNotification(
               "", std::string(INPUT_REPORT_UUID),
               [joyconSide = player.side, joyconOrientation = player.orientation,
                &player](const std::vector<uint8_t> &buffer_in) {
                 std::vector<uint8_t> buffer = buffer_in;
-#endif
 
-        // Optical Mouse Toggle Logic (Only for Right Joy-Con/Joy-Con 2)
-        if (joyconSide == JoyConSide::Right) {
-          uint32_t btnState = ExtractButtonState(buffer);
-          bool chatPressed = (btnState & 0x000040) != 0;
+                // Optical Mouse Toggle Logic (Only for Right Joy-Con/Joy-Con 2)
+                if (joyconSide == JoyConSide::Right) {
+                  uint32_t btnState = ExtractButtonState(buffer);
+                  bool chatPressed = (btnState & 0x000040) != 0;
 
-          if (chatPressed && !player.wasChatPressed) {
-            player.mouseMode = (player.mouseMode + 1) % 4;
-            const char *modeName = "OFF";
-            uint8_t ledPattern = 0x01;
-            if (player.mouseMode == 1) {
-              modeName = "FAST";
-              ledPattern = 0x02;
-            } else if (player.mouseMode == 2) {
-              modeName = "NORMAL";
-              ledPattern = 0x04;
-            } else if (player.mouseMode == 3) {
-              modeName = "SLOW";
-              ledPattern = 0x08;
-            }
+                  if (chatPressed && !player.wasChatPressed) {
+                    player.mouseMode = (player.mouseMode + 1) % 4;
+                    const char *modeName = "OFF";
+                    uint8_t ledPattern = 0x01;
+                    if (player.mouseMode == 1) {
+                      modeName = "FAST";
+                      ledPattern = 0x02;
+                    } else if (player.mouseMode == 2) {
+                      modeName = "NORMAL";
+                      ledPattern = 0x04;
+                    } else if (player.mouseMode == 3) {
+                      modeName = "SLOW";
+                      ledPattern = 0x08;
+                    }
 
-            TCOUT << TSTR("Optical Mouse Mode: ") << modeName << std::endl;
-#ifdef _WIN32
-            SetPlayerLEDs(player.joycon.writeChar, ledPattern);
-            EmitSound(player.joycon.writeChar);
-#else
+                    TCOUT << TSTR("Optical Mouse Mode: ") << modeName
+                          << std::endl;
                     SetPlayerLed(player.joycon.device, ledPattern);
-#endif
-          }
-          player.wasChatPressed = chatPressed;
-        }
+                  }
+                  player.wasChatPressed = chatPressed;
+                }
 
-        DS4_REPORT_EX report =
-            GenerateDS4Report(buffer, joyconSide, joyconOrientation);
+                DS4_REPORT_EX report =
+                    GenerateDS4Report(buffer, joyconSide, joyconOrientation);
 
-#ifdef _WIN32
-        vigem_target_ds4_update_ex(vigem_client, player.ds4Controller, report);
-#else
                 VirtualControllerReport mac_report;
                 mac_report.left_stick_x = report.Report.bThumbLX;
                 mac_report.left_stick_y = report.Report.bThumbLY;
@@ -1345,50 +1385,48 @@ int main() {
                 mac_report.right_stick_y = report.Report.bThumbRY;
                 mac_report.buttons = report.Report.wButtons;
                 mac_report.dpad = 0;
+                mac_report.left_trigger = report.Report.bThumbLX; // Fix typo from last try? No, triggerL
                 mac_report.left_trigger = report.Report.bTriggerL;
                 mac_report.right_trigger = report.Report.bTriggerR;
                 mac_controller->UpdateReport(mac_report);
-#endif
               })) {
         TCOUT << TSTR("Notifications enabled.\n");
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         SetPlayerLed(player.joycon.device, 0x01);
-      }
-      else {
+      } else {
         TCERR << TSTR("Failed to enable notifications.\n");
       }
 #endif
-
       TCOUT << TSTR("Press Enter to continue...\n");
       TSTRING dummy;
       TGETLINE(TCIN, dummy);
     } else if (config.controllerType == DualJoyCon) {
-      TCOUT << TSTR("Please sync your RIGHT Joy-Con now.\n");
-      ConnectedJoyCon rightJoyCon =
-          WaitForJoyCon(TSTR("Waiting for RIGHT Joy-Con..."));
+        TCOUT << TSTR("Please sync your RIGHT Joy-Con now.\n");
+        ConnectedJoyCon rightJoyCon =
+            WaitForJoyCon(TSTR("Waiting for RIGHT Joy-Con..."));
 #ifdef _WIN32
-      if (rightJoyCon.writeChar) {
-        SendCustomCommands(rightJoyCon.writeChar);
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        SetPlayerLEDs(rightJoyCon.writeChar, 0x01);
-        EmitSound(rightJoyCon.writeChar);
-      }
+        if (rightJoyCon.writeChar) {
+          SendCustomCommands(rightJoyCon.writeChar);
+          std::this_thread::sleep_for(std::chrono::milliseconds(200));
+          SetPlayerLEDs(rightJoyCon.writeChar, 0x01);
+          EmitSound(rightJoyCon.writeChar);
+        }
 #else
       if (rightJoyCon.device) {
         SetPlayerLed(rightJoyCon.device, 0x01);
       }
 #endif
 
-      TCOUT << TSTR("Please sync your LEFT Joy-Con now.\n");
-      ConnectedJoyCon leftJoyCon =
-          WaitForJoyCon(TSTR("Waiting for LEFT Joy-Con..."));
+        TCOUT << TSTR("Please sync your LEFT Joy-Con now.\n");
+        ConnectedJoyCon leftJoyCon =
+            WaitForJoyCon(TSTR("Waiting for LEFT Joy-Con..."));
 #ifdef _WIN32
-      if (leftJoyCon.writeChar) {
-        SendCustomCommands(leftJoyCon.writeChar);
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        SetPlayerLEDs(leftJoyCon.writeChar, 0x08);
-        EmitSound(leftJoyCon.writeChar);
-      }
+        if (leftJoyCon.writeChar) {
+          SendCustomCommands(leftJoyCon.writeChar);
+          std::this_thread::sleep_for(std::chrono::milliseconds(200));
+          SetPlayerLEDs(leftJoyCon.writeChar, 0x08);
+          EmitSound(leftJoyCon.writeChar);
+        }
 #else
       if (leftJoyCon.device) {
         SetPlayerLed(leftJoyCon.device, 0x08);
@@ -1396,52 +1434,52 @@ int main() {
 #endif
 
 #ifdef _WIN32
-      PVIGEM_TARGET ds4_controller = vigem_target_ds4_alloc();
-      auto ret = vigem_target_add(vigem_client, ds4_controller);
-      if (!VIGEM_SUCCESS(ret)) {
-        TCERR << TSTR("Failed to add DS4 controller target: 0x") << std::hex
-              << ret << TSTR("\n");
-        exit(1);
-      }
+        PVIGEM_TARGET ds4_controller = vigem_target_ds4_alloc();
+        auto ret = vigem_target_add(vigem_client, ds4_controller);
+        if (!VIGEM_SUCCESS(ret)) {
+          TCERR << TSTR("Failed to add DS4 controller target: 0x") << std::hex
+                << ret << TSTR("\n");
+          exit(1);
+        }
 #else
       void *ds4_controller = nullptr;
 #endif
 
-      auto dualPlayer = std::make_unique<DualJoyConPlayer>();
-      dualPlayer->leftJoyCon = leftJoyCon;
-      dualPlayer->rightJoyCon = rightJoyCon;
-      dualPlayer->gyroSource = config.gyroSource;
+        auto dualPlayer = std::make_unique<DualJoyConPlayer>();
+        dualPlayer->leftJoyCon = leftJoyCon;
+        dualPlayer->rightJoyCon = rightJoyCon;
+        dualPlayer->gyroSource = config.gyroSource;
 #ifdef _WIN32
-      dualPlayer->ds4Controller = ds4_controller;
+        dualPlayer->ds4Controller = ds4_controller;
 #endif
-      dualPlayer->running.store(true);
+        dualPlayer->running.store(true);
 
-      // Mutex-protected buffers for thread-safe data passing
-      struct SharedBuffer {
-        std::vector<uint8_t> data;
-        std::mutex mtx;
-      };
-      auto leftShared = std::make_shared<SharedBuffer>();
-      auto rightShared = std::make_shared<SharedBuffer>();
+        // Mutex-protected buffers for thread-safe data passing
+        struct SharedBuffer {
+          std::vector<uint8_t> data;
+          std::mutex mtx;
+        };
+        auto leftShared = std::make_shared<SharedBuffer>();
+        auto rightShared = std::make_shared<SharedBuffer>();
 
 #ifdef _WIN32
-      dualPlayer->leftJoyCon.inputChar.ValueChanged(
-          [leftShared](GattCharacteristic const &,
-                       GattValueChangedEventArgs const &args) {
-            auto reader = DataReader::FromBuffer(args.CharacteristicValue());
-            std::lock_guard<std::mutex> lock(leftShared->mtx);
-            leftShared->data.resize(reader.UnconsumedBufferLength());
-            reader.ReadBytes(leftShared->data);
-          });
+        dualPlayer->leftJoyCon.inputChar.ValueChanged(
+            [leftShared](GattCharacteristic const &,
+                         GattValueChangedEventArgs const &args) {
+              auto reader = DataReader::FromBuffer(args.CharacteristicValue());
+              std::lock_guard<std::mutex> lock(leftShared->mtx);
+              leftShared->data.resize(reader.UnconsumedBufferLength());
+              reader.ReadBytes(leftShared->data);
+            });
 
-      dualPlayer->rightJoyCon.inputChar.ValueChanged(
-          [rightShared](GattCharacteristic const &,
-                        GattValueChangedEventArgs const &args) {
-            auto reader = DataReader::FromBuffer(args.CharacteristicValue());
-            std::lock_guard<std::mutex> lock(rightShared->mtx);
-            rightShared->data.resize(reader.UnconsumedBufferLength());
-            reader.ReadBytes(rightShared->data);
-          });
+        dualPlayer->rightJoyCon.inputChar.ValueChanged(
+            [rightShared](GattCharacteristic const &,
+                          GattValueChangedEventArgs const &args) {
+              auto reader = DataReader::FromBuffer(args.CharacteristicValue());
+              std::lock_guard<std::mutex> lock(rightShared->mtx);
+              rightShared->data.resize(reader.UnconsumedBufferLength());
+              reader.ReadBytes(rightShared->data);
+            });
 #else
       dualPlayer->leftJoyCon.device->SubscribeNotification(
           "", std::string(INPUT_REPORT_UUID),
@@ -1458,30 +1496,30 @@ int main() {
           });
 #endif
 
-      dualPlayer->updateThread = std::thread(
-          [dualPlayerPtr = dualPlayer.get(), leftShared, rightShared]() {
-            while (dualPlayerPtr->running.load(std::memory_order_acquire)) {
-              std::vector<uint8_t> leftBuf, rightBuf;
-              {
-                std::lock_guard<std::mutex> lock(leftShared->mtx);
-                leftBuf = leftShared->data;
-              }
-              {
-                std::lock_guard<std::mutex> lock(rightShared->mtx);
-                rightBuf = rightShared->data;
-              }
+        dualPlayer->updateThread = std::thread(
+            [dualPlayerPtr = dualPlayer.get(), leftShared, rightShared]() {
+              while (dualPlayerPtr->running.load(std::memory_order_acquire)) {
+                std::vector<uint8_t> leftBuf, rightBuf;
+                {
+                  std::lock_guard<std::mutex> lock(leftShared->mtx);
+                  leftBuf = leftShared->data;
+                }
+                {
+                  std::lock_guard<std::mutex> lock(rightShared->mtx);
+                  rightBuf = rightShared->data;
+                }
 
-              if (leftBuf.empty() || rightBuf.empty()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                continue;
-              }
+                if (leftBuf.empty() || rightBuf.empty()) {
+                  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                  continue;
+                }
 
-              DS4_REPORT_EX report = GenerateDualJoyConDS4Report(
-                  leftBuf, rightBuf, dualPlayerPtr->gyroSource);
+                DS4_REPORT_EX report = GenerateDualJoyConDS4Report(
+                    leftBuf, rightBuf, dualPlayerPtr->gyroSource);
 
 #ifdef _WIN32
-              vigem_target_ds4_update_ex(vigem_client,
-                                         dualPlayerPtr->ds4Controller, report);
+                vigem_target_ds4_update_ex(
+                    vigem_client, dualPlayerPtr->ds4Controller, report);
 #else
               VirtualControllerReport mac_report;
               mac_report.left_stick_x = report.Report.bThumbLX;
@@ -1494,37 +1532,37 @@ int main() {
               mac_report.right_trigger = report.Report.bTriggerR;
               mac_controller->UpdateReport(mac_report);
 #endif
-              std::this_thread::sleep_for(std::chrono::milliseconds(16));
-            }
-          });
+                std::this_thread::sleep_for(std::chrono::milliseconds(16));
+              }
+            });
 
-      dualPlayers.push_back(std::move(dualPlayer));
-      TCOUT << TSTR("Dual Joy-Cons connected and configured. Press Enter to "
-                    "continue...\n");
-      TSTRING dummy;
-      TGETLINE(TCIN, dummy);
+        dualPlayers.push_back(std::move(dualPlayer));
+        TCOUT << TSTR("Dual Joy-Cons connected and configured. Press Enter to "
+                      "continue...\n");
+        TSTRING dummy;
+        TGETLINE(TCIN, dummy);
     } else if (config.controllerType == ProController) {
-      TCOUT << TSTR("Please sync your Pro Controller now.\n");
-      ConnectedJoyCon proController =
-          WaitForJoyCon(TSTR("Waiting for Pro Controller..."));
+        TCOUT << TSTR("Please sync your Pro Controller now.\n");
+        ConnectedJoyCon proController =
+            WaitForJoyCon(TSTR("Waiting for Pro Controller..."));
 
 #ifdef _WIN32
-      PVIGEM_TARGET ds4_controller = vigem_target_ds4_alloc();
-      auto ret = vigem_target_add(vigem_client, ds4_controller);
-      if (!VIGEM_SUCCESS(ret)) {
-        TCERR << TSTR("Failed to add DS4 controller target: 0x") << std::hex
-              << ret << TSTR("\n");
-        exit(1);
-      }
-      proController.inputChar.ValueChanged(
-          [ds4_controller](GattCharacteristic const &,
-                           GattValueChangedEventArgs const &args) {
-            auto reader = DataReader::FromBuffer(args.CharacteristicValue());
-            std::vector<uint8_t> buffer(reader.UnconsumedBufferLength());
-            reader.ReadBytes(buffer);
-            DS4_REPORT_EX report = GenerateProControllerReport(buffer);
-            vigem_target_ds4_update_ex(vigem_client, ds4_controller, report);
-          });
+        PVIGEM_TARGET ds4_controller = vigem_target_ds4_alloc();
+        auto ret = vigem_target_add(vigem_client, ds4_controller);
+        if (!VIGEM_SUCCESS(ret)) {
+          TCERR << TSTR("Failed to add DS4 controller target: 0x") << std::hex
+                << ret << TSTR("\n");
+          exit(1);
+        }
+        proController.inputChar.ValueChanged(
+            [ds4_controller](GattCharacteristic const &,
+                             GattValueChangedEventArgs const &args) {
+              auto reader = DataReader::FromBuffer(args.CharacteristicValue());
+              std::vector<uint8_t> buffer(reader.UnconsumedBufferLength());
+              reader.ReadBytes(buffer);
+              DS4_REPORT_EX report = GenerateProControllerReport(buffer);
+              vigem_target_ds4_update_ex(vigem_client, ds4_controller, report);
+            });
 #else
       proController.device->SubscribeNotification(
           "", std::string(INPUT_REPORT_UUID),
@@ -1542,63 +1580,63 @@ int main() {
             mac_controller->UpdateReport(mac_report);
           });
 #endif
-      proPlayers.push_back({proController
+        proPlayers.push_back({proController
 #ifdef _WIN32
-                            ,
-                            ds4_controller
+                              ,
+                              ds4_controller
 #endif
-      });
-      TCOUT << TSTR("Pro Controller connected. Press Enter to continue...\n");
-      TSTRING dummy;
-      TGETLINE(TCIN, dummy);
+        });
+        TCOUT << TSTR("Pro Controller connected. Press Enter to continue...\n");
+        TSTRING dummy;
+        TGETLINE(TCIN, dummy);
     }
-  }
+    }
 
-  TCOUT << TSTR("All players connected.\n");
-  TCOUT << TSTR("- Press Enter to exit\n\n");
+    TCOUT << TSTR("All players connected.\n");
+    TCOUT << TSTR("- Press Enter to exit\n\n");
 
-  while (true) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    while (true) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
 #ifdef _WIN32
-    if (_kbhit()) {
+      if (_kbhit()) {
 #else
     if (kbhit()) {
 #endif
-      TSTRING dummy;
-      TGETLINE(TCIN, dummy);
-      break;
+        TSTRING dummy;
+        TGETLINE(TCIN, dummy);
+        break;
+      }
     }
-  }
 
-  // Cleanup
-  for (auto &dp : dualPlayers) {
-    dp->running.store(false);
-    if (dp->updateThread.joinable())
-      dp->updateThread.join();
+    // Cleanup
+    for (auto &dp : dualPlayers) {
+      dp->running.store(false);
+      if (dp->updateThread.joinable())
+        dp->updateThread.join();
 #ifdef _WIN32
-    vigem_target_remove(vigem_client, dp->ds4Controller);
-    vigem_target_free(dp->ds4Controller);
+      vigem_target_remove(vigem_client, dp->ds4Controller);
+      vigem_target_free(dp->ds4Controller);
 #endif
-  }
-  for (auto &sp : singlePlayers) {
+    }
+    for (auto &sp : singlePlayers) {
 #ifdef _WIN32
-    vigem_target_remove(vigem_client, sp.ds4Controller);
-    vigem_target_free(sp.ds4Controller);
+      vigem_target_remove(vigem_client, sp.ds4Controller);
+      vigem_target_free(sp.ds4Controller);
 #endif
-  }
-  for (auto &pp : proPlayers) {
+    }
+    for (auto &pp : proPlayers) {
 #ifdef _WIN32
-    vigem_target_remove(vigem_client, pp.ds4Controller);
-    vigem_target_free(pp.ds4Controller);
+      vigem_target_remove(vigem_client, pp.ds4Controller);
+      vigem_target_free(pp.ds4Controller);
 #endif
-  }
+    }
 
 #ifdef _WIN32
-  if (vigem_client) {
-    vigem_disconnect(vigem_client);
-    vigem_free(vigem_client);
-  }
+    if (vigem_client) {
+      vigem_disconnect(vigem_client);
+      vigem_free(vigem_client);
+    }
 #endif
 
-  return 0;
-}
+    return 0;
+  }

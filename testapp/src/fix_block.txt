@@ -1,0 +1,112 @@
+#ifdef _WIN32
+      player.joycon.inputChar.ValueChanged(
+          [joyconSide = player.side, joyconOrientation = player.orientation,
+           &player](GattCharacteristic const &,
+                    GattValueChangedEventArgs const &args) {
+            auto reader = DataReader::FromBuffer(args.CharacteristicValue());
+            std::vector<uint8_t> buffer(reader.UnconsumedBufferLength());
+            reader.ReadBytes(buffer);
+
+            // Optical Mouse Toggle Logic (Only for Right Joy-Con/Joy-Con 2)
+            if (joyconSide == JoyConSide::Right) {
+              uint32_t btnState = ExtractButtonState(buffer);
+              bool chatPressed = (btnState & 0x000040) != 0;
+
+              if (chatPressed && !player.wasChatPressed) {
+                player.mouseMode = (player.mouseMode + 1) % 4;
+                const char *modeName = "OFF";
+                uint8_t ledPattern = 0x01;
+                if (player.mouseMode == 1) {
+                  modeName = "FAST";
+                  ledPattern = 0x02;
+                } else if (player.mouseMode == 2) {
+                  modeName = "NORMAL";
+                  ledPattern = 0x04;
+                } else if (player.mouseMode == 3) {
+                  modeName = "SLOW";
+                  ledPattern = 0x08;
+                }
+
+                TCOUT << TSTR("Optical Mouse Mode: ") << modeName << std::endl;
+                SetPlayerLEDs(player.joycon.writeChar, ledPattern);
+                EmitSound(player.joycon.writeChar);
+              }
+              player.wasChatPressed = chatPressed;
+            }
+
+            DS4_REPORT_EX report =
+                GenerateDS4Report(buffer, joyconSide, joyconOrientation);
+            vigem_target_ds4_update_ex(vigem_client, player.ds4Controller,
+                                       report);
+          });
+
+      auto status =
+          player.joycon.inputChar
+              .WriteClientCharacteristicConfigurationDescriptorAsync(
+                  GattClientCharacteristicConfigurationDescriptorValue::Notify)
+              .get();
+      if (status == GattCommunicationStatus::Success) {
+        TCOUT << TSTR("Notifications enabled.\n");
+        SendCustomCommands(player.joycon.writeChar);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        SetPlayerLEDs(player.joycon.writeChar, 0x01);
+        EmitSound(player.joycon.writeChar);
+      } else {
+        TCOUT << TSTR("Failed to enable notifications.\n");
+      }
+#else
+      if (player.joycon.device->SubscribeNotification(
+              "", std::string(INPUT_REPORT_UUID),
+              [joyconSide = player.side, joyconOrientation = player.orientation,
+               &player](const std::vector<uint8_t> &buffer_in) {
+                std::vector<uint8_t> buffer = buffer_in;
+
+                // Optical Mouse Toggle Logic (Only for Right Joy-Con/Joy-Con 2)
+                if (joyconSide == JoyConSide::Right) {
+                  uint32_t btnState = ExtractButtonState(buffer);
+                  bool chatPressed = (btnState & 0x000040) != 0;
+
+                  if (chatPressed && !player.wasChatPressed) {
+                    player.mouseMode = (player.mouseMode + 1) % 4;
+                    const char *modeName = "OFF";
+                    uint8_t ledPattern = 0x01;
+                    if (player.mouseMode == 1) {
+                      modeName = "FAST";
+                      ledPattern = 0x02;
+                    } else if (player.mouseMode == 2) {
+                      modeName = "NORMAL";
+                      ledPattern = 0x04;
+                    } else if (player.mouseMode == 3) {
+                      modeName = "SLOW";
+                      ledPattern = 0x08;
+                    }
+
+                    TCOUT << TSTR("Optical Mouse Mode: ") << modeName
+                          << std::endl;
+                    SetPlayerLed(player.joycon.device, ledPattern);
+                  }
+                  player.wasChatPressed = chatPressed;
+                }
+
+                DS4_REPORT_EX report =
+                    GenerateDS4Report(buffer, joyconSide, joyconOrientation);
+
+                VirtualControllerReport mac_report;
+                mac_report.left_stick_x = report.Report.bThumbLX;
+                mac_report.left_stick_y = report.Report.bThumbLY;
+                mac_report.right_stick_x = report.Report.bThumbRX;
+                mac_report.right_stick_y = report.Report.bThumbRY;
+                mac_report.buttons = report.Report.wButtons;
+                mac_report.dpad = 0;
+                mac_report.left_trigger = report.Report.bThumbLX; // Fix typo from last try? No, triggerL
+                mac_report.left_trigger = report.Report.bTriggerL;
+                mac_report.right_trigger = report.Report.bTriggerR;
+                mac_controller->UpdateReport(mac_report);
+              })) {
+        TCOUT << TSTR("Notifications enabled.\n");
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        SetPlayerLed(player.joycon.device, 0x01);
+      } else {
+        TCERR << TSTR("Failed to enable notifications.\n");
+      }
+#endif
