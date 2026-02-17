@@ -1,7 +1,6 @@
 #pragma once
 #include "IVirtualController.h"
-#include <CoreFoundation/CoreFoundation.h>
-#include <IOKit/hidsystem/IOHIDUserDevice.h>
+#include <memory>
 
 class MacVirtualController : public IVirtualController {
 public:
@@ -12,5 +11,6 @@ public:
   bool UpdateReport(const VirtualControllerReport &report) override;
 
 private:
-  IOHIDUserDeviceRef device_ = nullptr;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };

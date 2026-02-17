@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
-project(testapp LANGUAGES CXX)
+if(APPLE)
+  project(testapp LANGUAGES CXX OBJCXX)
+else()
+  project(testapp LANGUAGES CXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,10 +33,21 @@ include_directories(
   ${CMAKE_SOURCE_DIR}/include
 )
 
-file(GLOB_RECURSE SRC_FILES
-  src/*.cpp
-  src/*.h
+if(APPLE)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0")
+endif()
+
+set(SRC_FILES
+  src/JoyConDecoder.cpp
+  src/MacBluetoothManager.cpp
+  src/testapp.cpp
 )
+
+if(WIN32)
+  # No extra files needed here yet
+elseif(APPLE)
+  list(APPEND SRC_FILES src/MacVirtualController.mm)
+endif()
 
 add_executable(testapp ${SRC_FILES})
 
