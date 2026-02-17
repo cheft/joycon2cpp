@@ -1725,7 +1725,10 @@ int main() {
       }
 #else
       if (rightJoyCon.device) {
-        SetPlayerLed(rightJoyCon.device, 0x01);
+        SendCustomCommands(rightJoyCon.device);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        SendGenericCommand(rightJoyCon.device, 0x09, 0x07,
+                           {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
       }
 #endif
 
@@ -1741,7 +1744,10 @@ int main() {
       }
 #else
       if (leftJoyCon.device) {
-        SetPlayerLed(leftJoyCon.device, 0x08);
+        SendCustomCommands(leftJoyCon.device);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        SendGenericCommand(leftJoyCon.device, 0x09, 0x07,
+                           {0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
       }
 #endif
 
@@ -1793,19 +1799,27 @@ int main() {
             reader.ReadBytes(rightShared->data);
           });
 #else
-      dualPlayer->leftJoyCon.device->SubscribeNotification(
-          "", std::string(INPUT_REPORT_UUID),
-          [leftShared](const std::vector<uint8_t> &buffer) {
-            std::lock_guard<std::mutex> lock(leftShared->mtx);
-            leftShared->data = buffer;
-          });
+      if (dualPlayer->leftJoyCon.device->SubscribeNotification(
+              "", std::string(INPUT_REPORT_UUID),
+              [leftShared](const std::vector<uint8_t> &buffer) {
+                std::lock_guard<std::mutex> lock(leftShared->mtx);
+                leftShared->data = buffer;
+              })) {
+        TCOUT << TSTR("Left Joy-Con notifications enabled.\n");
+      } else {
+        TCERR << TSTR("Failed to enable left Joy-Con notifications!\n");
+      }
 
-      dualPlayer->rightJoyCon.device->SubscribeNotification(
-          "", std::string(INPUT_REPORT_UUID),
-          [rightShared](const std::vector<uint8_t> &buffer) {
-            std::lock_guard<std::mutex> lock(rightShared->mtx);
-            rightShared->data = buffer;
-          });
+      if (dualPlayer->rightJoyCon.device->SubscribeNotification(
+              "", std::string(INPUT_REPORT_UUID),
+              [rightShared](const std::vector<uint8_t> &buffer) {
+                std::lock_guard<std::mutex> lock(rightShared->mtx);
+                rightShared->data = buffer;
+              })) {
+        TCOUT << TSTR("Right Joy-Con notifications enabled.\n");
+      } else {
+        TCERR << TSTR("Failed to enable right Joy-Con notifications!\n");
+      }
 #endif
 
       dualPlayer->updateThread = std::thread(
