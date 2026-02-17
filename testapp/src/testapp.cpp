@@ -21,6 +21,7 @@ using namespace Windows::Foundation;
 #else
 #include "MacBluetoothManager.h"
 #include "MacVirtualController.h"
+#include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <fcntl.h>
 #include <termios.h>
@@ -1695,8 +1696,8 @@ int main() {
                 mac_report.left_stick_y = report.Report.bThumbLY;
                 mac_report.right_stick_x = report.Report.bThumbRX;
                 mac_report.right_stick_y = report.Report.bThumbRY;
-                mac_report.buttons = report.Report.wButtons;
-                mac_report.dpad = 0;
+                mac_report.buttons = (report.Report.wButtons >> 4);
+                mac_report.dpad = (report.Report.wButtons & 0x0F);
                 mac_report.left_trigger = report.Report.bTriggerL;
                 mac_report.right_trigger = report.Report.bTriggerR;
                 mac_controller->UpdateReport(mac_report);
@@ -1852,8 +1853,8 @@ int main() {
               mac_report.left_stick_y = report.Report.bThumbLY;
               mac_report.right_stick_x = report.Report.bThumbRX;
               mac_report.right_stick_y = report.Report.bThumbRY;
-              mac_report.buttons = report.Report.wButtons;
-              mac_report.dpad = 0;
+              mac_report.buttons = (report.Report.wButtons >> 4);
+              mac_report.dpad = (report.Report.wButtons & 0x0F);
               mac_report.left_trigger = report.Report.bTriggerL;
               mac_report.right_trigger = report.Report.bTriggerR;
               mac_controller->UpdateReport(mac_report);
@@ -1899,8 +1900,8 @@ int main() {
             mac_report.left_stick_y = report.Report.bThumbLY;
             mac_report.right_stick_x = report.Report.bThumbRX;
             mac_report.right_stick_y = report.Report.bThumbRY;
-            mac_report.buttons = report.Report.wButtons;
-            mac_report.dpad = 0;
+            mac_report.buttons = (report.Report.wButtons >> 4);
+            mac_report.dpad = (report.Report.wButtons & 0x0F);
             mac_report.left_trigger = report.Report.bTriggerL;
             mac_report.right_trigger = report.Report.bTriggerR;
             mac_controller->UpdateReport(mac_report);
@@ -1926,6 +1927,8 @@ int main() {
 #ifdef _WIN32
     if (_kbhit()) {
 #else
+    // Process main run loop events (required for GCVirtualController)
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, true);
     if (kbhit()) {
 #endif
       TSTRING dummy;

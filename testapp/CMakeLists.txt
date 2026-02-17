@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 if(APPLE)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0")
   project(testapp LANGUAGES CXX OBJCXX)
 else()
   project(testapp LANGUAGES CXX)
@@ -33,9 +34,6 @@ include_directories(
   ${CMAKE_SOURCE_DIR}/include
 )
 
-if(APPLE)
-  set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0")
-endif()
 
 set(SRC_FILES
   src/JoyConDecoder.cpp
@@ -69,6 +67,7 @@ elseif(APPLE)
             "-framework IOKit"
             "-framework Foundation"
             "-framework CoreGraphics"
+            "-framework GameController"
     )
 endif()
 
@@ -76,4 +75,7 @@ if(MSVC)
   target_compile_options(testapp PRIVATE /W3 /permissive-)
 else()
   target_compile_options(testapp PRIVATE -Wall -Wextra -pedantic)
+  if(APPLE)
+    target_compile_options(testapp PRIVATE -mmacosx-version-min=14.0)
+  endif()
 endif()
