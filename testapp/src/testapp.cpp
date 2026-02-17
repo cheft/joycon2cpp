@@ -1021,6 +1021,21 @@ void SetFullReportMode(std::shared_ptr<IBluetoothDevice> device) {
   std::vector<uint8_t> data = {0x30};
   SendGenericCommand(device, 0x01, 0x03, data);
 }
+
+void SendCustomCommands(std::shared_ptr<IBluetoothDevice> device) {
+  if (!device)
+    return;
+
+  std::vector<std::vector<uint8_t>> commands = {
+      {0x0c, 0x91, 0x01, 0x02, 0x00, 0x04, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00},
+      {0x0c, 0x91, 0x01, 0x04, 0x00, 0x04, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00}};
+
+  for (const auto &cmd : commands) {
+    device->WriteCharacteristic("", WRITE_COMMAND_UUID, cmd);
+    TCOUT << TSTR("Custom command sent.\n");
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  }
+}
 #endif
 #ifdef _WIN32
 struct ConnectedJoyCon {
@@ -1421,9 +1436,12 @@ int main() {
 
                   if (dx != 0 || dy != 0) {
                     float sensitivity = 1.0f;
-                    if (player.mouseMode == 1) sensitivity = 1.0f;
-                    else if (player.mouseMode == 2) sensitivity = 0.6f;
-                    else if (player.mouseMode == 3) sensitivity = 0.3f;
+                    if (player.mouseMode == 1)
+                      sensitivity = 1.0f;
+                    else if (player.mouseMode == 2)
+                      sensitivity = 0.6f;
+                    else if (player.mouseMode == 3)
+                      sensitivity = 0.3f;
 
                     int moveX = static_cast<int>(dx * sensitivity);
                     int moveY = static_cast<int>(dy * sensitivity);
@@ -1435,28 +1453,39 @@ int main() {
                 bool zrPressed = (btnState & 0x008000) != 0;
                 bool stickPressed = (btnState & 0x000004) != 0;
 
-                if (rPressed && !player.leftBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_LEFTDOWN);
-                else if (!rPressed && player.leftBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_LEFTUP);
+                if (rPressed && !player.leftBtnPressed)
+                  SendMouseInput(0, 0, MOUSEEVENTF_LEFTDOWN);
+                else if (!rPressed && player.leftBtnPressed)
+                  SendMouseInput(0, 0, MOUSEEVENTF_LEFTUP);
                 player.leftBtnPressed = rPressed;
 
-                if (zrPressed && !player.rightBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_RIGHTDOWN);
-                else if (!zrPressed && player.rightBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_RIGHTUP);
+                if (zrPressed && !player.rightBtnPressed)
+                  SendMouseInput(0, 0, MOUSEEVENTF_RIGHTDOWN);
+                else if (!zrPressed && player.rightBtnPressed)
+                  SendMouseInput(0, 0, MOUSEEVENTF_RIGHTUP);
                 player.rightBtnPressed = zrPressed;
 
-                if (stickPressed && !player.middleBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_MIDDLEDOWN);
-                else if (!stickPressed && player.middleBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_MIDDLEUP);
+                if (stickPressed && !player.middleBtnPressed)
+                  SendMouseInput(0, 0, MOUSEEVENTF_MIDDLEDOWN);
+                else if (!stickPressed && player.middleBtnPressed)
+                  SendMouseInput(0, 0, MOUSEEVENTF_MIDDLEUP);
                 player.middleBtnPressed = stickPressed;
 
-                auto stickData = DecodeJoystick(buffer, joyconSide, joyconOrientation);
+                auto stickData =
+                    DecodeJoystick(buffer, joyconSide, joyconOrientation);
                 const int SCROLL_DEADZONE = 4000;
                 if (std::abs(stickData.y) > SCROLL_DEADZONE) {
-                  float intensity = (std::abs(stickData.y) - SCROLL_DEADZONE) / (32767.0f - SCROLL_DEADZONE);
+                  float intensity = (std::abs(stickData.y) - SCROLL_DEADZONE) /
+                                    (32767.0f - SCROLL_DEADZONE);
                   float speed = intensity * 40.0f;
-                  if (stickData.y > 0) player.scrollAccumulator -= speed;
-                  else player.scrollAccumulator += speed;
+                  if (stickData.y > 0)
+                    player.scrollAccumulator -= speed;
+                  else
+                    player.scrollAccumulator += speed;
 
                   if (std::abs(player.scrollAccumulator) >= 120.0f) {
-                    int clicks = static_cast<int>(player.scrollAccumulator / 120.0f);
+                    int clicks =
+                        static_cast<int>(player.scrollAccumulator / 120.0f);
                     player.scrollAccumulator -= (clicks * 120.0f);
                     SendMouseInput(0, 0, MOUSEEVENTF_WHEEL, clicks * 120);
                   }
@@ -1554,6 +1583,8 @@ int main() {
                   if (player.mouseMode > 0) {
                     auto [rawX, rawY] = GetRawOpticalMouse(buffer);
                     if (player.firstOpticalRead) {
+                      printf("DEBUG: buffer.size()=%zu, rawX=%d, rawY=%d\n",
+                             buffer.size(), rawX, rawY);
                       player.lastOpticalX = rawX;
                       player.lastOpticalY = rawY;
                       player.firstOpticalRead = false;
@@ -1565,9 +1596,12 @@ int main() {
 
                       if (dx != 0 || dy != 0) {
                         float sensitivity = 1.0f;
-                        if (player.mouseMode == 1) sensitivity = 1.0f;
-                        else if (player.mouseMode == 2) sensitivity = 0.6f;
-                        else if (player.mouseMode == 3) sensitivity = 0.3f;
+                        if (player.mouseMode == 1)
+                          sensitivity = 1.0f;
+                        else if (player.mouseMode == 2)
+                          sensitivity = 0.6f;
+                        else if (player.mouseMode == 3)
+                          sensitivity = 0.3f;
 
                         int moveX = static_cast<int>(dx * sensitivity);
                         int moveY = static_cast<int>(dy * sensitivity);
@@ -1579,28 +1613,40 @@ int main() {
                     bool zrPressed = (btnState & 0x008000) != 0;
                     bool stickPressed = (btnState & 0x000004) != 0;
 
-                    if (rPressed && !player.leftBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_LEFTDOWN);
-                    else if (!rPressed && player.leftBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_LEFTUP);
+                    if (rPressed && !player.leftBtnPressed)
+                      SendMouseInput(0, 0, MOUSEEVENTF_LEFTDOWN);
+                    else if (!rPressed && player.leftBtnPressed)
+                      SendMouseInput(0, 0, MOUSEEVENTF_LEFTUP);
                     player.leftBtnPressed = rPressed;
 
-                    if (zrPressed && !player.rightBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_RIGHTDOWN);
-                    else if (!zrPressed && player.rightBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_RIGHTUP);
+                    if (zrPressed && !player.rightBtnPressed)
+                      SendMouseInput(0, 0, MOUSEEVENTF_RIGHTDOWN);
+                    else if (!zrPressed && player.rightBtnPressed)
+                      SendMouseInput(0, 0, MOUSEEVENTF_RIGHTUP);
                     player.rightBtnPressed = zrPressed;
 
-                    if (stickPressed && !player.middleBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_MIDDLEDOWN);
-                    else if (!stickPressed && player.middleBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_MIDDLEUP);
+                    if (stickPressed && !player.middleBtnPressed)
+                      SendMouseInput(0, 0, MOUSEEVENTF_MIDDLEDOWN);
+                    else if (!stickPressed && player.middleBtnPressed)
+                      SendMouseInput(0, 0, MOUSEEVENTF_MIDDLEUP);
                     player.middleBtnPressed = stickPressed;
 
-                    auto stickData = DecodeJoystick(buffer, joyconSide, joyconOrientation);
+                    auto stickData =
+                        DecodeJoystick(buffer, joyconSide, joyconOrientation);
                     const int SCROLL_DEADZONE = 4000;
                     if (std::abs(stickData.y) > SCROLL_DEADZONE) {
-                      float intensity = (std::abs(stickData.y) - SCROLL_DEADZONE) / (32767.0f - SCROLL_DEADZONE);
+                      float intensity =
+                          (std::abs(stickData.y) - SCROLL_DEADZONE) /
+                          (32767.0f - SCROLL_DEADZONE);
                       float speed = intensity * 40.0f;
-                      if (stickData.y > 0) player.scrollAccumulator -= speed;
-                      else player.scrollAccumulator += speed;
+                      if (stickData.y > 0)
+                        player.scrollAccumulator -= speed;
+                      else
+                        player.scrollAccumulator += speed;
 
                       if (std::abs(player.scrollAccumulator) >= 120.0f) {
-                        int clicks = static_cast<int>(player.scrollAccumulator / 120.0f);
+                        int clicks =
+                            static_cast<int>(player.scrollAccumulator / 120.0f);
                         player.scrollAccumulator -= (clicks * 120.0f);
                         SendMouseInput(0, 0, MOUSEEVENTF_WHEEL, clicks * 120);
                       }
@@ -1656,6 +1702,7 @@ int main() {
                 mac_controller->UpdateReport(mac_report);
               })) {
         TCOUT << TSTR("Notifications enabled.\n");
+        SendCustomCommands(player.joycon.device);
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         SetPlayerLEDs(player.joycon, 0x01);
         EmitSound(player.joycon);
