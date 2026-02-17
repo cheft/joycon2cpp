@@ -8,6 +8,22 @@ if(MSVC)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
+include(FetchContent)
+FetchContent_Declare(
+  simpleble
+  GIT_REPOSITORY https://github.com/OpenBluetoothToolbox/SimpleBLE.git
+  GIT_TAG main
+)
+FetchContent_GetProperties(simpleble)
+if(NOT simpleble_POPULATED)
+  FetchContent_Populate(simpleble)
+  add_subdirectory(${simpleble_SOURCE_DIR}/simpleble ${simpleble_BINARY_DIR})
+endif()
+
+# Help CMake find SimpleBLE headers including generated ones
+include_directories(${simpleble_SOURCE_DIR}/simpleble/include)
+include_directories(${simpleble_BINARY_DIR}/export)
+
 include_directories(
   src
   ${CMAKE_SOURCE_DIR}/include
@@ -15,18 +31,31 @@ include_directories(
 
 file(GLOB_RECURSE SRC_FILES
   src/*.cpp
+  src/*.h
 )
 
 add_executable(testapp ${SRC_FILES})
 
-target_link_directories(testapp PRIVATE ${CMAKE_SOURCE_DIR}/lib)
-target_link_libraries(testapp
-    PRIVATE
-        setupapi
-        hid
-        ViGEmClient
-        windowsapp
-)
+if(WIN32)
+    target_link_directories(testapp PRIVATE ${CMAKE_SOURCE_DIR}/lib)
+    target_link_libraries(testapp
+        PRIVATE
+            setupapi
+            hid
+            ViGEmClient
+            windowsapp
+    )
+elseif(APPLE)
+    target_link_libraries(testapp
+        PRIVATE
+            simpleble
+            "-framework IOBluetooth"
+            "-framework CoreBluetooth"
+            "-framework IOKit"
+            "-framework Foundation"
+            "-framework CoreGraphics"
+    )
+endif()
 
 if(MSVC)
   target_compile_options(testapp PRIVATE /W3 /permissive-)
