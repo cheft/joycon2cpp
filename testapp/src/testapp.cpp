@@ -1070,7 +1070,7 @@ void SetPlayerLEDs(ConnectedJoyCon &cj, uint8_t pattern) {
   SendGenericCommand(cj.writeChar, 0x09, 0x07, data);
 #else
   if (cj.device) {
-    SetPlayerLed(cj.device, pattern);
+    SendGenericCommand(cj.device, 0x09, 0x07, data);
   }
 #endif
 }
