@@ -57,7 +57,7 @@ bool MacBluetoothDevice::WriteCharacteristic(const std::string &service_uuid,
       return false;
     }
 
-    peripheral_.write_request(actual_service, char_uuid, data);
+    peripheral_.write_command(actual_service, char_uuid, data);
     return true;
   } catch (const std::exception &e) {
     printf("WriteCharacteristic failed: %s\n", e.what());
