@@ -36,22 +36,26 @@ MacVirtualController::~MacVirtualController() {
 }
 
 bool MacVirtualController::Initialize() {
-  printf("Initializing MacVirtualController (Dynamic Gamepad Emulation)...\n");
+  printf("[MacVirtualController] Starting initialization...\n");
 
   Class GCVClass = NSClassFromString(@"GCVirtualController");
   Class GCVConfigClass = NSClassFromString(@"GCVirtualControllerConfiguration");
 
   if (!GCVClass || !GCVConfigClass) {
-    printf("DEBUG: GCVirtualController classes not found in runtime.\n");
+    printf("[MacVirtualController] ERROR: GCVirtualController classes not "
+           "found in runtime. Fallback to mouse mode.\n");
     impl_->mouseMode = true;
     return true;
   }
 
-  __block bool success = false;
-  __block id vc = nil;
-  dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+  __block bool finished = false;
+  __block bool localSuccess = false;
+  __block id localVC = nil;
 
-  dispatch_async(dispatch_get_main_queue(), ^{
+  // We need to run this on the main thread, but if we are ALREADY on the main
+  // thread, we must avoid dispatch_async + semaphore deadlock.
+
+  void (^initBlock)(void) = ^{
     @try {
       id config = [[GCVConfigClass alloc] init];
       NSMutableSet *elements = [NSMutableSet set];
@@ -74,46 +78,67 @@ bool MacVirtualController::Initialize() {
       [config setValue:elements forKey:@"elements"];
 
       SEL factorySel = sel_registerName("virtualControllerWithConfiguration:");
-      vc = ((id(*)(id, SEL, id))objc_msgSend)(GCVClass, factorySel, config);
+      localVC =
+          ((id(*)(id, SEL, id))objc_msgSend)(GCVClass, factorySel, config);
 
-      if (vc) {
+      if (localVC) {
         SEL connectSel = sel_registerName("connectWithReplyHandler:");
         void (^replyHandler)(NSError *) = ^(NSError *error) {
           if (error) {
-            printf("GCVirtualController connection error: %s\n",
+            printf("[MacVirtualController] Connection error: %s\n",
                    [[error localizedDescription] UTF8String]);
-            success = false;
+            localSuccess = false;
           } else {
-            printf("GCVirtualController connected successfully! macOS should "
-                   "now see a new gamepad.\n");
-            success = true;
+            printf("[MacVirtualController] Connected successfully! Gamepad is "
+                   "now visible to macOS.\n");
+            localSuccess = true;
           }
-          dispatch_semaphore_signal(sem);
+          finished = true;
         };
-        ((void (*)(id, SEL, id))objc_msgSend)(vc, connectSel, replyHandler);
+        ((void (*)(id, SEL, id))objc_msgSend)(localVC, connectSel,
+                                              replyHandler);
       } else {
-        printf("Failed to instantiate GCVirtualController.\n");
-        dispatch_semaphore_signal(sem);
+        printf("[MacVirtualController] ERROR: Failed to instantiate "
+               "GCVirtualController.\n");
+        finished = true;
       }
     } @catch (NSException *e) {
-      printf("Exception during GCVirtualController init: %s\n",
+      printf("[MacVirtualController] Exception during init: %s\n",
              [[e reason] UTF8String]);
-      dispatch_semaphore_signal(sem);
+      finished = true;
     }
-  });
+  };
 
-  dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC);
-  if (dispatch_semaphore_wait(sem, timeout) != 0) {
-    printf("GCVirtualController initialization timed out.\n");
-    impl_->mouseMode = true;
-  } else if (success && vc) {
-    impl_->virtualController = vc;
+  if ([NSThread isMainThread]) {
+    initBlock();
+    // Run the loop while waiting for the connection callback
+    NSDate *timeoutDate = [NSDate dateWithTimeIntervalSinceNow:5.0];
+    while (!finished && [timeoutDate timeIntervalSinceNow] > 0) {
+      [[NSRunLoop currentRunLoop]
+             runMode:NSDefaultRunLoopMode
+          beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+    }
+  } else {
+    dispatch_async(dispatch_get_main_queue(), initBlock);
+    // Poll the finished flag (since we are on a background thread, this is
+    // okay)
+    int timeout = 50; // 5 seconds
+    while (!finished && timeout-- > 0) {
+      [NSThread sleepForTimeInterval:0.1];
+    }
+  }
+
+  if (localSuccess && localVC) {
+    impl_->virtualController = localVC;
     impl_->gcInitialized = true;
     impl_->mouseMode = false;
+    printf("[MacVirtualController] Initialization COMPLETE.\n");
   } else {
     impl_->mouseMode = true;
-    printf(
-        "GCVirtualController failed. Falling back to mouse/keyboard mode.\n");
+    if (!finished) {
+      printf("[MacVirtualController] ERROR: Initialization timed out.\n");
+    }
+    printf("[MacVirtualController] Falling back to mouse/keyboard mode.\n");
   }
 
   return true;
@@ -123,10 +148,11 @@ static void SetElementValue(id element, float value) {
   if (!element)
     return;
   @try {
-    // Try KVC first which is usually enough for GCVirtualController elements
+    // Try KVC which is the standard way to update virtual controller local
+    // state
     [element setValue:@(value) forKey:@"value"];
   } @catch (NSException *e) {
-    // Fallback to internal _setValue: if KVC fails
+    // Fallback to internal _setValue:
     SEL sel = sel_registerName("_setValue:");
     if ([element respondsToSelector:sel]) {
       ((void (*)(id, SEL, float))objc_msgSend)(element, sel, value);
@@ -163,10 +189,18 @@ bool MacVirtualController::UpdateReport(const VirtualControllerReport &report) {
       SetElementValue(gamepad.rightTrigger, report.right_trigger / 255.0f);
 
       // Update Buttons
-      SetElementValue(gamepad.buttonX, (report.buttons & 0x0001) ? 1.0f : 0.0f);
-      SetElementValue(gamepad.buttonA, (report.buttons & 0x0002) ? 1.0f : 0.0f);
-      SetElementValue(gamepad.buttonB, (report.buttons & 0x0004) ? 1.0f : 0.0f);
-      SetElementValue(gamepad.buttonY, (report.buttons & 0x0008) ? 1.0f : 0.0f);
+      // Bitmask: report.buttons was shifted >> 4 in testapp.cpp
+      // Original DS4 Bits: 4=Sq, 5=X, 6=O, 7=Tri, 8=L1, 9=R1, 10=L2, 11=R2,
+      // 12=Share, 13=Opt, 14=L3, 15=R3 After >> 4: 0=Sq, 1=X, 2=O, 3=Tri, 4=L1,
+      // 5=R1, 6=L2, 7=R2, 8=Share, 9=Opt, 10=L3, 11=R3
+      SetElementValue(gamepad.buttonX,
+                      (report.buttons & 0x0001) ? 1.0f : 0.0f); // Square
+      SetElementValue(gamepad.buttonA,
+                      (report.buttons & 0x0002) ? 1.0f : 0.0f); // Cross
+      SetElementValue(gamepad.buttonB,
+                      (report.buttons & 0x0004) ? 1.0f : 0.0f); // Circle
+      SetElementValue(gamepad.buttonY,
+                      (report.buttons & 0x0008) ? 1.0f : 0.0f); // Triangle
       SetElementValue(gamepad.leftShoulder,
                       (report.buttons & 0x0010) ? 1.0f : 0.0f);
       SetElementValue(gamepad.rightShoulder,
@@ -218,6 +252,12 @@ bool MacVirtualController::UpdateReport(const VirtualControllerReport &report) {
       return true;
     } else {
       // Fallback: Mouse/Keyboard emulation via CGEvent
+      static bool fallbackLogged = false;
+      if (!fallbackLogged) {
+        printf("[MacVirtualController] WARNING: Using fallback mouse emulation "
+               "(Gamepad disabled).\n");
+        fallbackLogged = true;
+      }
       float dx = (report.right_stick_x - 128) / 10.0f;
       float dy = (report.right_stick_y - 128) / 10.0f;
       if (std::abs(dx) > 1.0f || std::abs(dy) > 1.0f) {
@@ -249,7 +289,9 @@ bool MacVirtualController::UpdateReport(const VirtualControllerReport &report) {
           impl_->buttons[bit] = isDown;
         }
       };
+      // Cross (bit 1 after shift) -> Left Click
       hBtn(1, kCGMouseButtonLeft, kCGEventLeftMouseDown, kCGEventLeftMouseUp);
+      // Circle (bit 2 after shift) -> Right Click
       hBtn(2, kCGMouseButtonRight, kCGEventRightMouseDown,
            kCGEventRightMouseUp);
       return true;
