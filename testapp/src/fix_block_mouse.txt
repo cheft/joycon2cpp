@@ -1,0 +1,291 @@
+#ifdef _WIN32
+      player.joycon.inputChar.ValueChanged(
+          [joyconSide = player.side, joyconOrientation = player.orientation,
+           &player](GattCharacteristic const &,
+                    GattValueChangedEventArgs const &args) {
+            auto reader = DataReader::FromBuffer(args.CharacteristicValue());
+            std::vector<uint8_t> buffer(reader.UnconsumedBufferLength());
+            reader.ReadBytes(buffer);
+
+            // Optical Mouse Toggle Logic (Only for Right Joy-Con/Joy-Con 2)
+            if (joyconSide == JoyConSide::Right) {
+              uint32_t btnState = ExtractButtonState(buffer);
+              bool chatPressed = (btnState & 0x000040) != 0;
+
+              if (chatPressed && !player.wasChatPressed) {
+                player.mouseMode = (player.mouseMode + 1) % 4;
+                const char *modeName = "OFF";
+                uint8_t ledPattern = 0x01;
+                if (player.mouseMode == 1) {
+                  modeName = "FAST";
+                  ledPattern = 0x02;
+                } else if (player.mouseMode == 2) {
+                  modeName = "NORMAL";
+                  ledPattern = 0x04;
+                } else if (player.mouseMode == 3) {
+                  modeName = "SLOW";
+                  ledPattern = 0x08;
+                }
+
+                TCOUT << TSTR("Optical Mouse Mode: ") << modeName << std::endl;
+                SetPlayerLEDs(player.joycon, ledPattern);
+                EmitSound(player.joycon);
+              }
+              player.wasChatPressed = chatPressed;
+
+              if (player.mouseMode > 0) {
+                auto [rawX, rawY] = GetRawOpticalMouse(buffer);
+                if (player.firstOpticalRead) {
+                  player.lastOpticalX = rawX;
+                  player.lastOpticalY = rawY;
+                  player.firstOpticalRead = false;
+                } else {
+                  int16_t dx = rawX - player.lastOpticalX;
+                  int16_t dy = rawY - player.lastOpticalY;
+                  player.lastOpticalX = rawX;
+                  player.lastOpticalY = rawY;
+
+                  if (dx != 0 || dy != 0) {
+                    float sensitivity = 1.0f;
+                    if (player.mouseMode == 1) sensitivity = 1.0f;
+                    else if (player.mouseMode == 2) sensitivity = 0.6f;
+                    else if (player.mouseMode == 3) sensitivity = 0.3f;
+
+                    int moveX = static_cast<int>(dx * sensitivity);
+                    int moveY = static_cast<int>(dy * sensitivity);
+                    SendMouseInput(moveX, moveY, MOUSEEVENTF_MOVE);
+                  }
+                }
+
+                bool rPressed = (btnState & 0x004000) != 0;
+                bool zrPressed = (btnState & 0x008000) != 0;
+                bool stickPressed = (btnState & 0x000004) != 0;
+
+                if (rPressed && !player.leftBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_LEFTDOWN);
+                else if (!rPressed && player.leftBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_LEFTUP);
+                player.leftBtnPressed = rPressed;
+
+                if (zrPressed && !player.rightBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_RIGHTDOWN);
+                else if (!zrPressed && player.rightBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_RIGHTUP);
+                player.rightBtnPressed = zrPressed;
+
+                if (stickPressed && !player.middleBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_MIDDLEDOWN);
+                else if (!stickPressed && player.middleBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_MIDDLEUP);
+                player.middleBtnPressed = stickPressed;
+
+                auto stickData = DecodeJoystick(buffer, joyconSide, joyconOrientation);
+                const int SCROLL_DEADZONE = 4000;
+                if (std::abs(stickData.y) > SCROLL_DEADZONE) {
+                  float intensity = (std::abs(stickData.y) - SCROLL_DEADZONE) / (32767.0f - SCROLL_DEADZONE);
+                  float speed = intensity * 40.0f;
+                  if (stickData.y > 0) player.scrollAccumulator -= speed;
+                  else player.scrollAccumulator += speed;
+
+                  if (std::abs(player.scrollAccumulator) >= 120.0f) {
+                    int clicks = static_cast<int>(player.scrollAccumulator / 120.0f);
+                    player.scrollAccumulator -= (clicks * 120.0f);
+                    SendMouseInput(0, 0, MOUSEEVENTF_WHEEL, clicks * 120);
+                  }
+                } else {
+                  player.scrollAccumulator = 0.0f;
+                }
+
+                const int BUTTON_THRESHOLD = 28000;
+                if (stickData.x < -BUTTON_THRESHOLD) {
+                  if (!player.mb4Pressed) {
+                    SendMouseInput(0, 0, MOUSEEVENTF_XDOWN, XBUTTON1);
+                    SendMouseInput(0, 0, MOUSEEVENTF_XUP, XBUTTON1);
+                    player.mb4Pressed = true;
+                  }
+                } else {
+                  player.mb4Pressed = false;
+                }
+                if (stickData.x > BUTTON_THRESHOLD) {
+                  if (!player.mb5Pressed) {
+                    SendMouseInput(0, 0, MOUSEEVENTF_XDOWN, XBUTTON2);
+                    SendMouseInput(0, 0, MOUSEEVENTF_XUP, XBUTTON2);
+                    player.mb5Pressed = true;
+                  }
+                } else {
+                  player.mb5Pressed = false;
+                }
+
+                buffer[4] &= ~0x40;
+                buffer[4] &= ~0x80;
+                buffer[5] &= ~0x04;
+                if (buffer.size() >= 16) {
+                  buffer[13] = 0x00;
+                  buffer[14] = 0x08;
+                  buffer[15] = 0x80;
+                }
+              } else {
+                player.firstOpticalRead = true;
+              }
+            }
+
+            DS4_REPORT_EX report =
+                GenerateDS4Report(buffer, joyconSide, joyconOrientation);
+            vigem_target_ds4_update_ex(vigem_client, player.ds4Controller,
+                                       report);
+          });
+
+      auto status =
+          player.joycon.inputChar
+              .WriteClientCharacteristicConfigurationDescriptorAsync(
+                  GattClientCharacteristicConfigurationDescriptorValue::Notify)
+              .get();
+      if (status == GattCommunicationStatus::Success) {
+        TCOUT << TSTR("Notifications enabled.\n");
+        SendCustomCommands(player.joycon);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        SetPlayerLEDs(player.joycon, 0x01);
+        EmitSound(player.joycon);
+      } else {
+        TCOUT << TSTR("Failed to enable notifications.\n");
+      }
+#else
+      if (player.joycon.device->SubscribeNotification(
+              "", std::string(INPUT_REPORT_UUID),
+              [joyconSide = player.side, joyconOrientation = player.orientation,
+               &player](const std::vector<uint8_t> &buffer_in) {
+                std::vector<uint8_t> buffer = buffer_in;
+
+                // Optical Mouse Toggle Logic (Only for Right Joy-Con/Joy-Con 2)
+                if (joyconSide == JoyConSide::Right) {
+                  uint32_t btnState = ExtractButtonState(buffer);
+                  bool chatPressed = (btnState & 0x000040) != 0;
+
+                  if (chatPressed && !player.wasChatPressed) {
+                    player.mouseMode = (player.mouseMode + 1) % 4;
+                    const char *modeName = "OFF";
+                    uint8_t ledPattern = 0x01;
+                    if (player.mouseMode == 1) {
+                      modeName = "FAST";
+                      ledPattern = 0x02;
+                    } else if (player.mouseMode == 2) {
+                      modeName = "NORMAL";
+                      ledPattern = 0x04;
+                    } else if (player.mouseMode == 3) {
+                      modeName = "SLOW";
+                      ledPattern = 0x08;
+                    }
+
+                    TCOUT << TSTR("Optical Mouse Mode: ") << modeName
+                          << std::endl;
+                    SetPlayerLEDs(player.joycon, ledPattern);
+                    EmitSound(player.joycon);
+                  }
+                  player.wasChatPressed = chatPressed;
+
+                  if (player.mouseMode > 0) {
+                    auto [rawX, rawY] = GetRawOpticalMouse(buffer);
+                    if (player.firstOpticalRead) {
+                      player.lastOpticalX = rawX;
+                      player.lastOpticalY = rawY;
+                      player.firstOpticalRead = false;
+                    } else {
+                      int16_t dx = rawX - player.lastOpticalX;
+                      int16_t dy = rawY - player.lastOpticalY;
+                      player.lastOpticalX = rawX;
+                      player.lastOpticalY = rawY;
+
+                      if (dx != 0 || dy != 0) {
+                        float sensitivity = 1.0f;
+                        if (player.mouseMode == 1) sensitivity = 1.0f;
+                        else if (player.mouseMode == 2) sensitivity = 0.6f;
+                        else if (player.mouseMode == 3) sensitivity = 0.3f;
+
+                        int moveX = static_cast<int>(dx * sensitivity);
+                        int moveY = static_cast<int>(dy * sensitivity);
+                        SendMouseInput(moveX, moveY, MOUSEEVENTF_MOVE);
+                      }
+                    }
+
+                    bool rPressed = (btnState & 0x004000) != 0;
+                    bool zrPressed = (btnState & 0x008000) != 0;
+                    bool stickPressed = (btnState & 0x000004) != 0;
+
+                    if (rPressed && !player.leftBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_LEFTDOWN);
+                    else if (!rPressed && player.leftBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_LEFTUP);
+                    player.leftBtnPressed = rPressed;
+
+                    if (zrPressed && !player.rightBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_RIGHTDOWN);
+                    else if (!zrPressed && player.rightBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_RIGHTUP);
+                    player.rightBtnPressed = zrPressed;
+
+                    if (stickPressed && !player.middleBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_MIDDLEDOWN);
+                    else if (!stickPressed && player.middleBtnPressed) SendMouseInput(0, 0, MOUSEEVENTF_MIDDLEUP);
+                    player.middleBtnPressed = stickPressed;
+
+                    auto stickData = DecodeJoystick(buffer, joyconSide, joyconOrientation);
+                    const int SCROLL_DEADZONE = 4000;
+                    if (std::abs(stickData.y) > SCROLL_DEADZONE) {
+                      float intensity = (std::abs(stickData.y) - SCROLL_DEADZONE) / (32767.0f - SCROLL_DEADZONE);
+                      float speed = intensity * 40.0f;
+                      if (stickData.y > 0) player.scrollAccumulator -= speed;
+                      else player.scrollAccumulator += speed;
+
+                      if (std::abs(player.scrollAccumulator) >= 120.0f) {
+                        int clicks = static_cast<int>(player.scrollAccumulator / 120.0f);
+                        player.scrollAccumulator -= (clicks * 120.0f);
+                        SendMouseInput(0, 0, MOUSEEVENTF_WHEEL, clicks * 120);
+                      }
+                    } else {
+                      player.scrollAccumulator = 0.0f;
+                    }
+
+                    const int BUTTON_THRESHOLD = 28000;
+                    if (stickData.x < -BUTTON_THRESHOLD) {
+                      if (!player.mb4Pressed) {
+                        SendMouseInput(0, 0, MOUSEEVENTF_XDOWN, XBUTTON1);
+                        SendMouseInput(0, 0, MOUSEEVENTF_XUP, XBUTTON1);
+                        player.mb4Pressed = true;
+                      }
+                    } else {
+                      player.mb4Pressed = false;
+                    }
+                    if (stickData.x > BUTTON_THRESHOLD) {
+                      if (!player.mb5Pressed) {
+                        SendMouseInput(0, 0, MOUSEEVENTF_XDOWN, XBUTTON2);
+                        SendMouseInput(0, 0, MOUSEEVENTF_XUP, XBUTTON2);
+                        player.mb5Pressed = true;
+                      }
+                    } else {
+                      player.mb5Pressed = false;
+                    }
+
+                    buffer[4] &= ~0x40;
+                    buffer[4] &= ~0x80;
+                    buffer[5] &= ~0x04;
+                    if (buffer.size() >= 16) {
+                      buffer[13] = 0x00;
+                      buffer[14] = 0x08;
+                      buffer[15] = 0x80;
+                    }
+                  } else {
+                    player.firstOpticalRead = true;
+                  }
+                }
+
+                DS4_REPORT_EX report =
+                    GenerateDS4Report(buffer, joyconSide, joyconOrientation);
+
+                VirtualControllerReport mac_report;
+                mac_report.left_stick_x = report.Report.bThumbLX;
+                mac_report.left_stick_y = report.Report.bThumbLY;
+                mac_report.right_stick_x = report.Report.bThumbRX;
+                mac_report.right_stick_y = report.Report.bThumbRY;
+                mac_report.buttons = report.Report.wButtons;
+                mac_report.dpad = 0;
+                mac_report.left_trigger = report.Report.bTriggerL;
+                mac_report.right_trigger = report.Report.bTriggerR;
+                mac_controller->UpdateReport(mac_report);
+              })) {
+        TCOUT << TSTR("Notifications enabled.\n");
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        SetPlayerLEDs(player.joycon, 0x01);
+        EmitSound(player.joycon);
+      } else {
+        TCERR << TSTR("Failed to enable notifications.\n");
+      }
+#endif
